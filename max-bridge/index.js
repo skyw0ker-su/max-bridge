@@ -205,9 +205,9 @@ export function apply(ctx, config = {}) {
       ctx.logger?.warn?.('max-bridge: нет доступной сессии для доставки')
       return
     }
+    const replyScript = config.replyScript || 'maxsend.py'
     const prefix = config.replyHint === true
-      ? '\n\n(Ответь пользователю в MAX скриптом ' +
-        'F:\\Sky-Deepseek\\work\\maxsend.py — текст передавай через --file в UTF-8.)'
+      ? `\n\n(Ответь пользователю в MAX скриптом ${replyScript} — текст передавай через --file в UTF-8.)`
       : ''
     const body = `[MAX] ${text}${prefix}`
     try {
@@ -366,7 +366,12 @@ export function apply(ctx, config = {}) {
   function restartApplication() {
     // Всю работу делает внешний скрипт: внутри spawn вложенные кавычки
     // ломают taskkill, а timeout без консоли вообще не работает.
-    const script = 'F:\\Sky-Deepseek\\restart-dsh.cmd'
+    // Путь задаётся в конфиге (config.restartScript), иначе кнопка не работает.
+    const script = config.restartScript
+    if (!script) {
+      log('рестарт: в конфиге не задан restartScript')
+      return
+    }
     try {
       const child = spawn('cmd.exe', ['/c', script], { detached: true, stdio: 'ignore', windowsHide: true })
       child.unref()
