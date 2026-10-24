@@ -1,0 +1,22 @@
+# секреты и локальные данные
+max-bot.json
+max-session.json
+*.log
+*.bak
+*.bak-*
+
+# конфиги с ключами и адресами
+cfg-*.json
+links-*.txt
+incy-*.json
+*-qr.png
+*.png
+*.pdf
+*.docx
+
+# бинарники и дампы
+*.exe
+*.rar
+*.iso
+dsh-inspect/
+tools/*.exe

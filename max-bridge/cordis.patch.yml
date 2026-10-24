@@ -1,0 +1,8 @@
+- insert:
+    - id: max-bridge
+      name: '@local/max-bridge'
+      config:
+        mode: queue
+        pollTimeoutSec: 25
+        replyHint: false
+        ackText: false
