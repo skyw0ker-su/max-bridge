@@ -711,8 +711,10 @@ export function apply(ctx, config = {}) {
           if (!text || !mid || state.seen.includes(mid)) continue
           // Отмечаем сообщение прочитанным: в MAX это действие mark_seen —
           // в документации его нет, но Bot API его принимает.
+          const seenAt = Date.now()
           void apiPost(account.token, `/chats/${account.chatId}/actions`, { action: 'mark_seen' })
-            .catch(() => { /* не критично */ })
+            .then(res => log(`mark_seen: ${JSON.stringify(res)} (${Date.now() - seenAt} мс)`))
+            .catch(error => log(`mark_seen ошибка: ${error.message}`))
           state.seen.push(mid)
           if (state.seen.length > SEEN_LIMIT) state.seen.splice(0, state.seen.length - SEEN_LIMIT)
           if (message?.sender?.is_bot) continue
