@@ -17,15 +17,32 @@ SESSIONS_BUTTON = {
 }
 
 
+CA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "russian_trusted_root_ca.pem")
+
+
+def _tls_args():
+    """Строгая проверка сертификата, если рядом лежит CA Минцифры."""
+    if os.path.isfile(CA_FILE):
+        return ["--cacert", CA_FILE]
+    return ["-k"]
+
+
 def api(method, path, body=None):
-    cmd = ["curl", "-k", "-s", "--max-time", "40", "-X", method,
+    cmd = ["curl", *_tls_args(), "-s", "--max-time", "40", "-X", method,
            "-H", f"Authorization: {TOKEN}"]
+    tmp = None
     if body is not None:
         f = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
         json.dump(body, f, ensure_ascii=False); f.close()
-        cmd += ["-H", "Content-Type: application/json", "--data-binary", "@" + f.name]
+        tmp = f.name
+        cmd += ["-H", "Content-Type: application/json", "--data-binary", "@" + tmp]
     cmd.append(BASE + path)
-    out = subprocess.run(cmd, capture_output=True, text=True).stdout
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True).stdout
+    finally:
+        # Раньше файлы копились в %TEMP% на каждый вызов.
+        if tmp and os.path.exists(tmp):
+            os.unlink(tmp)
     return json.loads(out) if out.strip().startswith("{") else out
 
 

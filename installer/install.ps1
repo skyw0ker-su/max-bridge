@@ -63,7 +63,12 @@ function Install-Bridge {
     Write-Log 'Сохраняю токен…'
     New-Item -ItemType Directory -Force -Path $DshHome | Out-Null
     $account = @{ token = $Token; chat_id = $ChatId } | ConvertTo-Json -Compress
-    Set-Content -Path (Join-Path $DshHome 'max-bot.json') -Value $account -Encoding UTF8
+    $tokenFile = Join-Path $DshHome 'max-bot.json'
+    # Важно: без BOM. Set-Content -Encoding UTF8 в PowerShell 5.1 пишет BOM,
+    # а JSON.parse в плагине на нём падает — токен перестаёт читаться.
+    [IO.File]::WriteAllText($tokenFile, $account, (New-Object Text.UTF8Encoding($false)))
+    # На Windows права 0600 не действуют: закрываем ACL на текущего пользователя.
+    & icacls $tokenFile /inheritance:r /grant:r "$($env:USERNAME):(R,W)" 2>&1 | Out-Null
     Write-Log "  чат: $ChatId"
 
     if (-not (Test-Path $ProfileDir)) {
@@ -87,7 +92,7 @@ function Install-Bridge {
     $bundles = @($pkg.dsh.profile.bundles)
     if ($bundles -notcontains '@local/max-bridge') { $bundles += '@local/max-bridge' }
     $pkg.dsh.profile.bundles = $bundles
-    $pkg | ConvertTo-Json -Depth 10 | Set-Content $pkgPath -Encoding UTF8
+    [IO.File]::WriteAllText($pkgPath, ($pkg | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding($false)))
     Write-Log '  зависимости профиля обновлены'
 
     # pnpm из поставки Harness — если он есть.

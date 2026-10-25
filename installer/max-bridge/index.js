@@ -4,9 +4,9 @@
  * Держит long-poll к Bot API MAX и вставляет каждое новое входящее сообщение
  * в сессию как обычное пользовательское, через ctx.sessionController.prompt().
  */
-import { readFileSync, appendFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs'
+import { readFileSync, appendFileSync, writeFileSync, readdirSync, existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import https from 'node:https'
@@ -15,10 +15,31 @@ export const inject = ['sessionController', 'llm', 'workspaceRegistry']
 
 const API_HOST = 'platform-api2.max.ru'
 const TOKEN_FILE = join(homedir(), '.dsh', 'max-bot.json')
+const MARKER_FILE = join(homedir(), '.dsh', 'max-marker.json')
+
+// Сертификат Минцифры: без него Bot API MAX не проходит проверку TLS.
+// Файл кладётся рядом с плагином (certs/), при наличии — проверка строгая.
+const CA_CANDIDATES = [
+  join(dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), 'certs', 'russian_trusted_root_ca.pem'),
+  join(homedir(), '.dsh', 'certs', 'russian_trusted_root_ca.pem'),
+]
+
+function loadCa() {
+  for (const candidate of CA_CANDIDATES) {
+    try {
+      if (existsSync(candidate)) return readFileSync(candidate, 'utf8')
+    } catch { /* пробуем следующий */ }
+  }
+  return undefined
+}
+
+const CA_PEM = loadCa()
+const TLS_OPTIONS = CA_PEM ? { ca: CA_PEM } : { rejectUnauthorized: false }
 
 function loadAccount() {
   try {
-    const raw = JSON.parse(readFileSync(TOKEN_FILE, 'utf8'))
+    // Файл мог быть записан редактором с BOM — JSON.parse на нём падает.
+    const raw = JSON.parse(readFileSync(TOKEN_FILE, 'utf8').replace(/^\uFEFF/, ''))
     return { token: raw.token, chatId: raw.chat_id }
   } catch {
     return {}
@@ -30,13 +51,32 @@ function sleep(ms) {
 }
 
 const LOG_FILE = join(homedir(), '.dsh', 'max-bridge.log')
+const LOG_LIMIT = 1024 * 1024
 
 function log(message) {
   try {
+    // Ротация: лог не должен расти бесконечно на флешке роутера/малом диске.
+    try {
+      if (statSync(LOG_FILE).size > LOG_LIMIT) writeFileSync(LOG_FILE, '')
+    } catch { /* файла ещё нет */ }
     appendFileSync(LOG_FILE, `${new Date().toISOString()} ${message}\n`)
   } catch {
     /* диагностика не критична */
   }
+}
+
+function loadMarker() {
+  try {
+    return JSON.parse(readFileSync(MARKER_FILE, 'utf8')).marker ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function saveMarker(marker) {
+  try {
+    writeFileSync(MARKER_FILE, JSON.stringify({ marker, at: Date.now() }))
+  } catch { /* не критично */ }
 }
 
 function apiPost(token, path, payload) {
@@ -52,7 +92,7 @@ function apiPost(token, path, payload) {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(body),
         },
-        rejectUnauthorized: false,
+        ...TLS_OPTIONS,
         timeout: 30000,
       },
       res => {
@@ -79,8 +119,7 @@ function apiGet(token, path) {
         path,
         method: 'GET',
         headers: { Authorization: token },
-        // Bot API MAX отдаёт сертификат с цепочкой Минцифры, которой нет в Node.
-        rejectUnauthorized: false,
+        ...TLS_OPTIONS,
         timeout: 90000,
       },
       res => {
@@ -103,7 +142,7 @@ export function apply(ctx, config = {}) {
   const mode = config.mode === 'steer' ? 'steer' : 'queue'
   const account = loadAccount()
   log(`конфиг: ${JSON.stringify(config)}`)
-  log('версия моста: панель под всеми сообщениями + крестики удаления в меню')
+  log(`TLS: ${CA_PEM ? 'строгая проверка (сертификат Минцифры найден)' : 'проверка отключена — сертификат не найден'}`)
 
   // Диагностика: какие провайдеры моделей доступны в этой сборке.
   try {
@@ -124,7 +163,11 @@ export function apply(ctx, config = {}) {
     return
   }
 
-  const state = { marker: '', seen: new Set(), stopped: false, sessionId: config.sessionId }
+  // Маркер переживает перезапуск: иначе сервер отдаст хвост апдейтов заново
+  // и старые сообщения повторно уйдут в сессию.
+  const state = { marker: loadMarker(), seen: [], stopped: false, sessionId: config.sessionId }
+  const SEEN_LIMIT = 500
+  log(`маркер long-poll: ${state.marker ? 'восстановлен из файла' : 'новый'}`)
   const cancelled = new AbortController()
 
   // Панель управления. Прикрепляем её к КАЖДОМУ сообщению бота: клавиатура в
@@ -148,7 +191,6 @@ export function apply(ctx, config = {}) {
     try { writeFileSync(SELECT_FILE, JSON.stringify({ sessionId: id })) } catch { /* не критично */ }
   }
   let selectedSession = config.sessionId || loadSelected()
-  let pendingChoices = []
   let pendingRename = null
 
   // При горячей перезагрузке прежний экземпляр мог остаться жить: гасим его.
@@ -640,20 +682,6 @@ export function apply(ctx, config = {}) {
         : 'Сессия не выбрана — работаю с самой свежей. Напишите /sessions для выбора.')
       return true
     }
-    const picked = trimmed.match(/^\/?(\d{1,2})$/)
-    if (picked && pendingChoices.length > 0) {
-      const index = Number(picked[1]) - 1
-      if (index >= 0 && index < pendingChoices.length) {
-        selectedSession = pendingChoices[index]
-        state.sessionId = selectedSession
-        saveSelected(selectedSession)
-        const roots = await listRoots()
-        const chosen = roots.find(item => item.sessionId === selectedSession)
-        await sendText(`Переключился на: ${chosen ? sessionTitle(chosen) : selectedSession}`)
-        log(`выбрана сессия: ${selectedSession}`)
-        return true
-      }
-    }
     return false
   }
 
@@ -663,7 +691,10 @@ export function apply(ctx, config = {}) {
         const query = `/updates?timeout=${pollTimeoutSec}&limit=20` +
           (state.marker ? `&marker=${encodeURIComponent(state.marker)}` : '')
         const response = await apiGet(account.token, query)
-        if (response?.marker) state.marker = String(response.marker)
+        if (response?.marker) {
+          state.marker = String(response.marker)
+          saveMarker(state.marker)
+        }
         for (const update of response?.updates ?? []) {
           if (update?.update_type === 'message_callback') {
             try {
@@ -677,8 +708,9 @@ export function apply(ctx, config = {}) {
           const message = update?.message
           const text = message?.body?.text
           const mid = message?.body?.mid
-          if (!text || !mid || state.seen.has(mid)) continue
-          state.seen.add(mid)
+          if (!text || !mid || state.seen.includes(mid)) continue
+          state.seen.push(mid)
+          if (state.seen.length > SEEN_LIMIT) state.seen.splice(0, state.seen.length - SEEN_LIMIT)
           if (message?.sender?.is_bot) continue
           if (account.chatId && String(message?.recipient?.chat_id) !== String(account.chatId)) continue
           // Ожидаем новое название сессии — это сообщение не уходит агенту.
@@ -709,6 +741,9 @@ export function apply(ctx, config = {}) {
           await deliver(text, message?.sender?.name)
         }
       } catch (error) {
+        // Дублируем в наш лог: ctx.logger в файл не пишет, и ошибки цикла
+        // раньше были невидимы.
+        log(`loop: ${error.message}`)
         ctx.logger?.warn?.(`max-bridge: ${error.message}`)
         await sleep(3000)
       }
@@ -783,8 +818,13 @@ export function apply(ctx, config = {}) {
     for (let i = 0; i < text.length; i += MAX_TEXT) chunks.push(text.slice(i, i + MAX_TEXT))
     if (chunks.length === 0) return
     log(`зеркалю ответ в MAX (${text.length} символов, частей ${chunks.length})`)
+    let first = true
     for (const chunk of chunks) {
       try {
+        // MAX ограничивает частоту отправки (~2 сообщения в секунду):
+        // между частями держим паузу, иначе часть может не уйти.
+        if (!first) await sleep(300)
+        first = false
         await apiPost(account.token, `/messages?chat_id=${account.chatId}`, {
           text: chunk,
           attachments: [withPanel()],
