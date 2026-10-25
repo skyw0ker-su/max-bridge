@@ -1,4 +1,4 @@
-# MAX Bridge
+# DeepSeek Harness MAX Bridge
 
 Плагин для DeepSeek Harness (Cordis): чат-бот в мессенджере MAX как пульт управления агентом.
 
