@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "MAX Bridge",
+    "description": "Delivers messages from the MAX messenger into this session as user prompts, so the agent answers them without a timer."
+  }
+}
