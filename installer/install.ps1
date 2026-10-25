@@ -26,8 +26,26 @@ $ErrorActionPreference = 'Stop'
 $ApiBase = 'https://platform-api2.max.ru'
 $DshHome = Join-Path $env:USERPROFILE '.dsh'
 $ProfileDir = Join-Path $DshHome 'profiles\desktop'
-$PluginSrc = Join-Path $PSScriptRoot 'max-bridge'
+
+# В собранном ps2exe $PSScriptRoot пустой — берём каталог самого exe.
+$ScriptDir = $PSScriptRoot
+if (-not $ScriptDir) { $ScriptDir = [System.AppDomain]::CurrentDomain.BaseDirectory }
+$PluginSrc = if ($ScriptDir) { Join-Path $ScriptDir 'max-bridge' } else { '' }
 $PluginDst = Join-Path $env:LOCALAPPDATA 'MaxBridge\max-bridge'
+$RepoZip = 'https://github.com/skyw0ker-su/max-bridge/archive/refs/heads/main.zip'
+
+# В собранном .exe рядом нет папки max-bridge — забираем плагин с GitHub.
+function Resolve-PluginSource {
+    if ($PluginSrc -and (Test-Path (Join-Path $PluginSrc 'index.js'))) { return $PluginSrc }
+    $tmp = Join-Path $env:TEMP ("maxbridge-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    $zip = Join-Path $tmp 'src.zip'
+    Invoke-WebRequest -Uri $RepoZip -OutFile $zip -UseBasicParsing -TimeoutSec 120
+    Expand-Archive -Path $zip -DestinationPath $tmp -Force
+    $found = Get-ChildItem $tmp -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'max-bridge\index.js') } | Select-Object -First 1
+    if (-not $found) { throw 'не удалось найти плагин в архиве репозитория' }
+    return (Join-Path $found.FullName 'max-bridge')
+}
 
 # ---------------------------------------------------------------- утилиты ---
 
@@ -54,10 +72,12 @@ function Write-Log {
 function Install-Bridge {
     param([string]$Token, [long]$ChatId)
 
-    Write-Log 'Копирую плагин…'
+    Write-Log 'Готовлю плагин…'
+    $source = Resolve-PluginSource
+    if ($source -ne $PluginSrc) { Write-Log "  скачан с GitHub: $RepoZip" }
     New-Item -ItemType Directory -Force -Path (Split-Path $PluginDst) | Out-Null
     if (Test-Path $PluginDst) { Remove-Item $PluginDst -Recurse -Force }
-    Copy-Item $PluginSrc $PluginDst -Recurse -Force
+    Copy-Item $source $PluginDst -Recurse -Force
     Write-Log "  плагин: $PluginDst"
 
     Write-Log 'Сохраняю токен…'
