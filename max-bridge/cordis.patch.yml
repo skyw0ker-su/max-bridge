@@ -6,3 +6,8 @@
         pollTimeoutSec: 25
         replyHint: false
         ackText: false
+        processFeed: false
+        processTools: false
+        debugEvents: false
+
+

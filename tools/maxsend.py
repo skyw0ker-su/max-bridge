@@ -4,10 +4,16 @@ cfg = json.load(open(os.path.expanduser("~/.dsh/max-bot.json"), encoding="utf-8"
 TOKEN = cfg["token"]; CHAT = str(cfg["chat_id"])
 BASE = "https://platform-api2.max.ru"
 
-# Кнопка «Сессии» под каждым сообщением — открывает меню выбора сессии DeepSeek.
+# Панель под каждым сообщением: сессии и новая сессия. Удаление — крестиком
+# рядом с названием в меню сессий.
 SESSIONS_BUTTON = {
     "type": "inline_keyboard",
-    "payload": {"buttons": [[{"type": "callback", "text": "🐋 Сессии", "payload": "menu"}]]},
+    "payload": {
+        "buttons": [[
+            {"type": "callback", "text": "🐋 Сессии", "payload": "menu"},
+            {"type": "callback", "text": "➕ Новая", "payload": "new"},
+        ]],
+    },
 }
 
 
